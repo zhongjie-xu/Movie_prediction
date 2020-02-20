@@ -1,0 +1,919 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(glmnet)
+library(MASS)
+library(knitr)
+library(plyr)
+library(ggplot2)
+library(tidyverse)
+library(gridExtra)
+library(dslabs)
+library(magrittr)
+library(tree)
+library(dplyr)
+library(tidyr)
+library(corrplot)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+1. Data Cleaning
+```{r}
+
+
+
+
+IMDB=read.csv("IMDBdata.csv")
+
+IMDB$Production_Company=addNA(IMDB$Production_Company)
+IMDB$Genre_2=addNA(IMDB$Genre_2)
+IMDB$Genre_3=addNA(IMDB$Genre_3)
+IMDB$Primary_production_country=addNA(IMDB$Primary_production_country)
+
+```
+
+
+
+2.create target variable
+```{r}
+#a. We subset only new movies released after 2000
+#Create NA factor for production company
+movie$Production_Company=addNA(movie$Production_Company)
+movie$Genre_2=addNA(movie$Genre_2)
+movie$Genre_3=addNA(movie$Genre_3)
+movie$Primary_production_country=addNA(movie$Primary_production_country)
+movies2000=subset(movie,Year>=2000)
+summary(movies2000)
+#3486 records
+hist(movie$Runtime)
+movies2000[movies2000$Runtime<10,]
+movies2000=subset(movies2000,Runtime>10)
+#b. Records where Budget and Revenue are 0
+both_NA= ifelse((movies2000$revenue==0)&(movies2000$budget==0),1,0)
+sum(both_NA) 
+#362 i.e. 9% movies have neither revenue nor budget. These could be our test data.
+movie_test = movies2000[both_NA==1,]
+write.csv(movie_test,"final_test_set.csv")
+summary(movie_test)
+either_NA=ifelse((movies2000$revenue==0)|(movies2000$budget==0),1,0)
+movie_train=movies2000[either_NA==0,]
+movie_train=movie_train[movie_train$budget>300,]
+movie_train[is.na(movie_train$Prime_genre),]
+movie_train=movie_train[!is.na(movie_train$Prime_genre),]
+
+#target variable creation
+movie_train$ROI <-((movie_train$revenue)-(movie_train$budget))/movie_train$budget
+summary(movie_train) #1971 to 1961 records
+
+#merge two dataset and from now on work with IMDB dataset
+IMDB=merge(movie_meta,movies2000,by='id')
+IMDB=distinct(IMDB,id, .keep_all= TRUE)
+write.csv(IMDB,"IMDB.csv")
+
+movie$Production_Company=addNA(movie$Production_Company)
+movie$Genre_2=addNA(movie$Genre_2)
+movie$Genre_3=addNA(movie$Genre_3)
+movie$Primary_production_country=addNA(movie$Primary_production_country)
+movies2000=subset(movie,Year>=2000)
+summary(movies2000)
+#3486 records
+hist(movie$Runtime)
+movies2000[movies2000$Runtime<10,]
+movies2000=subset(movies2000,Runtime>10)
+#b. Records where Budget and Revenue are 0
+both_NA= ifelse((movies2000$revenue==0)&(movies2000$budget==0),1,0)
+sum(both_NA) 
+#362 i.e. 9% movies have neither revenue nor budget. These could be our test data.
+movie_test = movies2000[both_NA==1,]
+write.csv(movie_test,"final_test_set.csv")
+summary(movie_test)
+either_NA=ifelse((movies2000$revenue==0)|(movies2000$budget==0),1,0)
+movie_train=movies2000[either_NA==0,]
+movie_train=movie_train[movie_train$budget>300,]
+movie_train[is.na(movie_train$Prime_genre),]
+movie_train=movie_train[!is.na(movie_train$Prime_genre),]
+
+#target variable creation
+movie_train$ROI <-((movie_train$revenue)-(movie_train$budget))/movie_train$budget
+summary(movie_train) #1971 to 1961 records
+
+#merge two dataset and from now on work with IMDB dataset
+IMDB=merge(movie_meta,movies2000,by='id')
+IMDB=distinct(IMDB,id, .keep_all= TRUE)
+write.csv(IMDB,"IMDB.csv")
+```
+
+
+
+
+3.We subset only new movies released after 2000
+data preparation
+```{r}
+#Get all repreating variables and remove them 
+#IMDBNum for Corroleation plot
+num=unlist(lapply(IMDB, is.numeric))
+IMDBNum=IMDB[,num]
+IMDBNum=IMDBNum[,-c(1,2,12,15,17)]
+summary(IMDBNum)
+
+#Chop imdb scores into  four categories
+summary(IMDBNum$imdb_score)
+IMDB$CriticLevel=cut(IMDB$imdb_score,breaks = c(0,5,6,7,10),labels = c("Bad","Acceptable","Good","Excellent"))
+IMDBNum$imdb_score=NULL
+#IMDBNum$budget=NULL
+IMDBNum$revenue=NULL
+IMDBNum$ROI=NULL
+IMDBNum$Genre=IMDB$Prime_genre
+IMDBNum$Director=IMDB$director_name
+IMDBNum$Lang=IMDB$Original_language
+IMDBNum$ProductionCountry=IMDB$Primary_production_country
+IMDBNum$ProductionCom=IMDB$Production_Company
+summary(IMDBNum)
+summary(IMDB)
+names(IMDB)
+drop=c("id","actor_2_name","gross","actor_1_name","actor_3_name","plot_keywords","imdb_score",
+       "Title","revenue","Genre_2","Genre_3","Popularity","Vote_Count","ROI","num_voted_users")
+IMDB_1=IMDB[ ,!names(IMDB)%in%drop]
+summary(IMDB_1)
+```
+
+
+
+
+4.Exploratory Data Analysis - Visualization
+```{r}
+head(IMDB)
+IMDB%>%
+  arrange(desc(revenue)) %>%
+  top_n(20, revenue) %>%
+  ggplot(aes(x=budget/1000000, y = ROI)) + 
+  geom_point(size = 1) + 
+  geom_smooth() + 
+  geom_text(aes(label = Title, size = 0.2,angle=30),check_overlap = TRUE) + 
+  xlab("Budget $million") + 
+  ylab("Percent Return on Investment") + 
+  ggtitle("20 Most Sell Movies based on its Return on Investment")   
+IMDB %>%
+  top_n(20, revenue) %>%
+  ggplot(aes(x = imdb_score, y = (revenue-budget)/10^6, size = ROI,col=Prime_genre)) + 
+  geom_point() + 
+  geom_text(aes(label = Title), size = 4,check_overlap = TRUE) +
+  xlab("Imdb score") + 
+  ylab("Gross money earned in million dollars") + 
+  ggtitle("Commercial success Vs Critics") +
+  theme(plot.title = element_text(hjust = 0.5))
+install.packages("tm")  # for text mining
+install.packages("SnowballC") # for text stemming
+install.packages("wordcloud") # word-cloud generator 
+install.packages("RColorBrewer") # color palettes
+# Load
+library("tm")
+library("SnowballC")
+library("wordcloud")
+library("RColorBrewer")
+text <- readLines(file.choose())
+docs <- Corpus(VectorSource(text))
+inspect(docs)
+
+# Convert the text to lower case
+docs <- tm_map(docs, content_transformer(tolower))
+# Remove numbers
+docs <- tm_map(docs, removeNumbers)
+# Remove english common stopwords
+docs <- tm_map(docs, removeWords, stopwords("english"))
+# Remove your own stop word
+# specify your stopwords as a character vector
+docs <- tm_map(docs, removeWords, c("blabla1", "blabla2")) 
+# Remove punctuations
+docs <- tm_map(docs, removePunctuation)
+# Eliminate extra white spaces
+docs <- tm_map(docs, stripWhitespace)
+
+docs <- tm_map(docs, stemDocument)
+
+docs <- tm_map(docs, stripWhitespace)
+dtm <- TermDocumentMatrix(docs)
+m <- as.matrix(dtm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+set.seed(127)
+wordcloud(words = d$word, freq = d$freq, min.freq = 1,
+          max.words=500, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+
+install.packages("ggcorrplot")
+library(ggcorrplot)
+head(movie_train)
+head(movie)
+drop = c("id", "Title","Month","Year","Prime_genre","Genre_2","Genre_3","Original_language","Production_Company","Status","Primary_production_country","ROI","plot_keywords","actor_3_name","actor_1_name","actor_1_name","actor_2_name","director_name","X","imdb_score","budget","revenue")
+movie_1 = movie[,!colnames(movie)%in%drop]
+head(movie_1)
+head(movie_1)
+correl = cor(movie_1)
+head(correl)
+ggcorrplot(correl)
+```
+
+
+
+5. Movie Revenue Prediction lambda.min, lasso with lambda.1se, Post-Lasso with lambda.min, Post-Lasso with lambda.1se and stepwise model change director and production company`
+```{r}
+
+
+library(glmnet)
+library(dplyr)
+library(ggplot2)
+library(MASS)
+library(plotmo)
+
+IMDB<-read.csv("IMDBdata.csv")
+glimpse(IMDB)
+ 
+drop=c("X","id","Genre_2","Genre_3","Title","plot_keywords","actor_1_name","actor_2_name","actor_3_name",
+       "Vote_Count","Popularity","num_voted_users","Company_rank","imdb_score","gross","ROI", "Primary_production_country")
+
+name_director = c("Clint Eastwood","Steven Spielberg","Shawn Levy","Michael Bay","Peter Jackson","Ron Howard",
+                  "Steven Soderbergh","Adam Shankman", "Antoine Fuqua", "Tim Burton", "Gore Verbinski")
+IMDB$director_name=as.character(IMDB$director_name)
+IMDB$director_name=ifelse( IMDB$director_name %in% name_director, IMDB$director_name,"other")
+IMDB$director_name=as.factor(IMDB$director_name)
+
+name_company =c("Universal_Pictures","Paramount_Pictures","Columbia_Pictures","New_Line_Cinema","Walt_Disney_Pictures",
+                "Twentieth_Century_Fox_Film_Corporation","Village_Roadshow_Pictures","DreamWorks_SKG",
+                "Fox_Searchlight_Pictures","Miramax_Films")
+IMDB$Production_Company=as.character(IMDB$Production_Company)
+IMDB$Production_Company=ifelse( IMDB$Production_Company %in% name_company, IMDB$Production_Company,"other")
+IMDB$Production_Company=as.factor(IMDB$Production_Company)
+
+
+#
+whole_set=IMDB[,!(names(IMDB) %in% drop)]
+glimpse(whole_set)
+
+#dropping rows with NA's: 1841-1790
+sum(is.na(whole_set))
+whole_set= na.omit(whole_set)
+sum(is.na(whole_set))
+names(whole_set)
+
+
+###----------------------------------------------5-fold cross validation--------------------------------------
+set.seed(999)
+nfold<-5
+k<-5
+n<-nrow(whole_set)
+foldid <- rep(1:nfold,each=ceiling(n/nfold))[sample(1:n)]
+train_id <- which(foldid!=k)
+test_id <- which(foldid==k)
+train<-whole_set[train_id,]
+train<-na.omit(train)
+sum(is.na(train))
+test<-whole_set[test_id,]
+
+
+#Lasso
+set.seed(999)
+names(whole_set)
+Mx<- model.matrix(revenue~., data=whole_set)[,-1]
+My<- whole_set$revenue
+par("mar")
+par(mar=c(4,4,4,4))
+lasso<-glmnet(Mx,My,alpha=1,family="gaussian")
+lassoCV <- cv.glmnet(Mx,My,type= "mse")
+
+plot(lassoCV)
+log(lassoCV$lambda.1se) #16.87
+log(lassoCV$lambda.min) #13.98
+lassoCV$lambda.1se  #21271649
+lassoCV$lambda.min  #1189258
+
+new = glmnet(Mx,My,lambda = lassoCV$lambda.min)
+S <- support(new$beta)
+colnames(Mx[,S])
+length(colnames(Mx[,S])) #50 var
+
+
+new1 = glmnet(Mx,My,lambda = lassoCV$lambda.1se)
+S1 <- support(new1$beta)
+colnames(Mx[,S1])
+length(colnames(Mx[,S1])) #9
+
+
+#modeling of lasso.1se lasso.min
+
+lasso.1se.fit <- glmnet(Mx[train_id,],My[train_id], lambda = lassoCV$lambda.1se)
+lasso.min.fit <- glmnet(Mx[train_id,],My[train_id], lambda = lassoCV$lambda.min)
+lasso.1se.predict=predict(lasso.1se.fit,newx =Mx[-train_id,])
+lasso.min.predict=predict(lasso.min.fit,newx = Mx[-train_id,])
+Lasso_1se_mse=mean((test$revenue-lasso.1se.predict)^2)
+Lasso_min_mse=mean((test$revenue-lasso.min.predict)^2)
+R2.L1se<-R2(y=test$revenue, pred=lasso.1se.predict, family="gaussian")
+R2.L1se
+R2.Lmin<-R2(y=test$revenue, pred=lasso.min.predict, family="gaussian")
+R2.Lmin
+mse.L1se<-mean((test$revenue-lasso.1se.predict)^2)
+mse.Lmin<-mean((test$revenue-lasso.min.predict)^2)
+
+
+#stepwise regression model
+library(MASS)
+fit <- glm(revenue~., data= whole_set)
+step<- step(fit,direction="both")
+predicted_step<-predict(step,newdata=test)
+R2.sw<-R2(y=test$revenue, pred=predicted_step, family="gaussian")
+R2.sw
+SW_mse=mean((test$revenue-predicted_step)^2)
+
+###--------------------------------------R square Plot---------------------------------
+M1<- c("Summary of R2" )
+M2<- paste( " L.min: R2 = ", R2.L1se)
+M3<- paste( " L.1se: R2 = ", R2.Lmin)
+M4<- paste( " Stepwise: R2 = ",R2.sw)
+cat(M1,M2,M3,M4)
+barplot(c(R2.L1se,R2.Lmin,R2.sw), las=2, xlab="", names = c("L1se","Lmin","SW"), ylab = bquote(R^2))
+
+
+
+
+#linear regression
+lm <-lm(revenue~., data=train)
+predicted_lm<-predict(lm,newdata=test)
+mean((predicted_lm-test$revenue)/test$revenue)
+
+
+
+###--------------------------------------MSE-------------------------------------
+N1<- c("Summary of MSE" )
+N2<- paste( " L.min: mse = ", mse.Lmin)
+N3<- paste( " L.1se: mse = ", mse.L1se)
+N4<- paste( " Stepwise: mse = ",SW_mse)
+cat(N1,N2,N3,N4)
+barplot(c(mse.L1se,mse.Lmin,SW_mse), las=2, xlab="", names = c("L1se","Lmin","SW"), ylab = bquote(MSE))
+```
+
+
+
+
+6.classification and oos test
+```{r}
+drop=c("id","actor_2_name","gross","actor_1_name","actor_3_name","plot_keywords","imdb_score",
+       "Title","revenue","Genre_2","Genre_3","Popularity","Vote_Count","ROI","num_voted_users")
+IMDB_1=IMDB[ ,!names(IMDB)%in%drop]
+summary(IMDB_1)
+
+
+
+Mx=model.matrix(CriticLevel~.,data=IMDB_1)[,-1]
+My=IMDB$CriticLevel
+summary(My)
+IMDB_Matrix=data.frame(Mx)
+
+lasso <- glmnet(Mx,My, family="multinomial")
+lassoCV <- cv.glmnet(Mx,My, family="multinomial")
+par(mar=c(2,2,2,2))
+par(mai=c(2,2,2,2))
+dev.off()
+plot(lassoCV, main="Fitting Graph for CV Lasso \n \n # of non-zero coefficients  ", xlab = expression(paste("log(",lambda,")")))
+
+lasso.1se=glmnet(Mx,My,lambda = lassoCV$lambda.1se,family = "multinomial")
+lasso.1se$beta
+support(lasso.1se$beta)
+
+install.packages("nnet")
+library(nnet)
+IMDB_Matrix=data.frame(Mx)
+IMDB_Matrix$CriticLevel=IMDB$CriticLevel
+Neural=multinom(CriticLevel~.,data = IMDB_Matrix)
+summary(Neural)
+predict(Neural,IMDB_Matrix,type = "probs")
+Neural_prediction=predict(Neural,IMDB_Matrix)
+cm=table(Neural_prediction,IMDB_Matrix$CriticLevel)
+cm
+sum(diag(cm))/sum(cm)
+
+#2. Classification Tree ------------------------------------------
+library(rpart)
+library(rpart.plot)
+simplet=rpart(CriticLevel~.,data=IMDB_Matrix)
+prp(simplet)
+#Accuracy
+Tree_prediction=predict(simplet,IMDB_Matrix,type = "class")
+cm_tree=table(Tree_prediction,IMDB_Matrix$CriticLevel)
+cm_tree
+sum(diag(cm))/sum(cm)
+
+#3. Binomial // Logistic Regression  -----------------------------
+#chop into two category
+IMDB_1$CriticLevel=cut(IMDB$imdb_score,breaks = c(0,6,10),labels = c("Bad","Good"))
+summary(IMDB_1)
+
+IMDB_2=IMDB_1
+#top_11 director and others according to frequency
+name_director = c("Clint Eastwood","Steven Spielberg","Shawn Levy","Michael Bay","Peter Jackson","Ron Howard",
+   "Steven Soderbergh","Adam Shankman", "Antoine Fuqua", "Tim Burton", "Gore Verbinski")
+IMDB_2$director_name=as.character(IMDB_1$director_name)
+IMDB_2$director_name=ifelse( IMDB_2$director_name %in% name_director, IMDB_2$director_name,"other")
+IMDB_2$director_name=as.factor(IMDB_2$director_name)
+
+#top_11 Production_Company and others according to frequency
+sort(table(IMDB_1$Production_Company),decreasing = TRUE)
+name_company =c("Universal_Pictures","Paramount_Pictures","Columbia_Pictures","New_Line_Cinema","Walt_Disney_Pictures",
+                "Twentieth_Century_Fox_Film_Corporation","Village_Roadshow_Pictures","DreamWorks_SKG",
+                "Fox_Searchlight_Pictures","Miramax_Films")
+IMDB_2$Production_Company=as.character(IMDB_1$Production_Company)
+IMDB_2$Production_Company=ifelse( IMDB_2$Production_Company %in% name_company, IMDB_2$Production_Company,"other")
+IMDB_2$Production_Company=as.factor(IMDB_2$Production_Company)
+table(IMDB_2$Production_Company)
+
+
+
+IMDB_2$Original_language=NULL
+
+sort(table(IMDB_1$Primary_production_country),decreasing = TRUE)
+name_country=c("US","GB","DE","CA","FR","AU","IN","ES","CN","IE","NZ")
+IMDB_2$Primary_production_country=as.character(IMDB_1$Primary_production_country)
+IMDB_2$Primary_production_country=ifelse(IMDB_2$Primary_production_country %in% name_country, IMDB_2$Primary_production_country,"other")
+IMDB_2$Primary_production_country=as.factor(IMDB_2$Primary_production_country)
+table(IMDB_2$Primary_production_country)
+
+summary(IMDB_2)
+
+#4. Using Lasso to choose all factor variables 
+
+LY=IMDB_2$CriticLevel
+LX= model.matrix(CriticLevel~.,data=IMDB_2,family='binomial')[,-1]
+head(LX)
+IMDB_Matrix=data.frame(LX,LY)
+
+simplet=rpart(LY~.,data=IMDB_Matrix)
+summary(simplet)
+prp(simplet)
+
+
+n=nrow(IMDB_2)
+nfold <- 10
+foldid <- rep(1:nfold,each=ceiling(n/nfold))[sample(1:n)]
+### create an empty dataframe of results
+OOS <- data.frame(logistic=rep(NA,nfold), tree=rep(NA,nfold), null=rep(NA,nfold)) 
+### Use a for loop to run through the nfold trails
+for(k in 1:nfold){ 
+train <- which(foldid!=k) # train on all but fold `k'
+  
+# Null Model - fit the two regressions and null model
+model.logistic <-glm(CriticLevel~., data=IMDB_2, subset=train,family="binomial",control=glm.control(maxit=50))
+model.tree <- tree(CriticLevel~ ., data=IMDB_2, subset=train) 
+model.nulll <-glm(CriticLevel~1, data=IMDB_2, subset=train,family="binomial")
+
+# Get predictions: type=response so we have probabilities
+pred.logistic <- predict(model.logistic, newdata=IMDB_2[-train,], type="response")
+pred.tree <- predict(model.tree, newdata=IMDB_2[-train,], type="vector")
+pred.tree <- pred.tree[,2]
+pred.null <- predict(model.nulll, newdata=IMDB_2[-train,], type="response")
+  
+## calculate and log R2
+drop=c("id","actor_2_name","gross","actor_1_name","actor_3_name","plot_keywords","imdb_score",
+       "Title","revenue","Genre_2","Genre_3","Popularity","Vote_Count","ROI","num_voted_users")
+IMDB_1=IMDB[ ,!names(IMDB)%in%drop]
+summary(IMDB_1)
+# ------------------------------------------
+# Modelling Part 1 - Linear Regression
+# ------------------------------------------
+
+# ------------------------------------------
+# Modelling Part 2 - Classification 
+# ------------------------------------------
+
+#1. Multinomial Regression
+
+#Feature engineering:What variables to choose
+Mx=model.matrix(CriticLevel~.,data=IMDB_1)[,-1]
+My=IMDB$CriticLevel
+summary(My)
+IMDB_Matrix=data.frame(Mx)
+
+lasso <- glmnet(Mx,My, family="multinomial")
+lassoCV <- cv.glmnet(Mx,My, family="multinomial")
+par(mar=c(2,2,2,2))
+par(mai=c(2,2,2,2))
+dev.off()
+plot(lassoCV, main="Fitting Graph for CV Lasso \n \n # of non-zero coefficients  ", xlab = expression(paste("log(",lambda,")")))
+
+lasso.1se=glmnet(Mx,My,lambda = lassoCV$lambda.1se,family = "multinomial")
+lasso.1se$beta
+support(lasso.1se$beta)
+
+
+
+#multinomial 
+install.packages("nnet")
+library(nnet)
+IMDB_Matrix=data.frame(Mx)
+IMDB_Matrix$CriticLevel=IMDB$CriticLevel
+Neural=multinom(CriticLevel~.,data = IMDB_Matrix)
+summary(Neural)
+predict(Neural,IMDB_Matrix,type = "probs")
+Neural_prediction=predict(Neural,IMDB_Matrix)
+cm=table(Neural_prediction,IMDB_Matrix$CriticLevel)
+cm
+sum(diag(cm))/sum(cm)
+
+#2. Classification Tree ------------------------------------------
+library(rpart)
+library(rpart.plot)
+simplet=rpart(CriticLevel~.,data=IMDB_Matrix)
+prp(simplet)
+#Accuracy
+Tree_prediction=predict(simplet,IMDB_Matrix,type = "class")
+cm_tree=table(Tree_prediction,IMDB_Matrix$CriticLevel)
+cm_tree
+sum(diag(cm))/sum(cm)
+
+#3. Binomial // Logistic Regression  -----------------------------
+#chop into two category
+IMDB_1$CriticLevel=cut(IMDB$imdb_score,breaks = c(0,6,10),labels = c("Bad","Good"))
+summary(IMDB_1)
+
+IMDB_2=IMDB_1
+#top_11 director and others according to frequency
+name_director = c("Clint Eastwood","Steven Spielberg","Shawn Levy","Michael Bay","Peter Jackson","Ron Howard",
+   "Steven Soderbergh","Adam Shankman", "Antoine Fuqua", "Tim Burton", "Gore Verbinski")
+IMDB_2$director_name=as.character(IMDB_1$director_name)
+IMDB_2$director_name=ifelse( IMDB_2$director_name %in% name_director, IMDB_2$director_name,"other")
+IMDB_2$director_name=as.factor(IMDB_2$director_name)
+
+#top_11 Production_Company and others according to frequency
+sort(table(IMDB_1$Production_Company),decreasing = TRUE)
+name_company =c("Universal_Pictures","Paramount_Pictures","Columbia_Pictures","New_Line_Cinema","Walt_Disney_Pictures",
+                "Twentieth_Century_Fox_Film_Corporation","Village_Roadshow_Pictures","DreamWorks_SKG",
+                "Fox_Searchlight_Pictures","Miramax_Films")
+IMDB_2$Production_Company=as.character(IMDB_1$Production_Company)
+IMDB_2$Production_Company=ifelse( IMDB_2$Production_Company %in% name_company, IMDB_2$Production_Company,"other")
+IMDB_2$Production_Company=as.factor(IMDB_2$Production_Company)
+table(IMDB_2$Production_Company)
+
+# sort(table(IMDB_1$Original_language),decreasing = TRUE)
+# name_lang=c("en","es","fr","hi","da","de")
+# IMDB_2$Original_language=as.character(IMDB_1$Original_language)
+# IMDB_2$Original_language=ifelse( IMDB_2$Original_language %in% name_lang,IMDB_2$Original_language,"other")
+# IMDB_2$Original_language=as.factor(IMDB_2$Original_language)
+# table(IMDB_2$Original_language)
+
+IMDB_2$Original_language=NULL
+
+sort(table(IMDB_1$Primary_production_country),decreasing = TRUE)
+name_country=c("US","GB","DE","CA","FR","AU","IN","ES","CN","IE","NZ")
+IMDB_2$Primary_production_country=as.character(IMDB_1$Primary_production_country)
+IMDB_2$Primary_production_country=ifelse(IMDB_2$Primary_production_country %in% name_country, IMDB_2$Primary_production_country,"other")
+IMDB_2$Primary_production_country=as.factor(IMDB_2$Primary_production_country)
+table(IMDB_2$Primary_production_country)
+
+summary(IMDB_2)
+
+#4. Using Lasso to choose all factor variables 
+
+LY=IMDB_2$CriticLevel
+LX= model.matrix(CriticLevel~.,data=IMDB_2,family='binomial')[,-1]
+head(LX)
+IMDB_Matrix=data.frame(LX,LY)
+
+simplet=rpart(LY~.,data=IMDB_Matrix)
+summary(simplet)
+prp(simplet)
+
+
+
+# ------------------------------------------
+# Evaluation
+# ------------------------------------------
+
+n=nrow(IMDB_2)
+nfold <- 10
+foldid <- rep(1:nfold,each=ceiling(n/nfold))[sample(1:n)]
+### create an empty dataframe of results
+OOS <- data.frame(logistic=rep(NA,nfold), tree=rep(NA,nfold), null=rep(NA,nfold)) 
+### Use a for loop to run through the nfold trails
+for(k in 1:nfold){ 
+train <- which(foldid!=k) # train on all but fold `k'
+  
+# Null Model - fit the two regressions and null model
+model.logistic <-glm(CriticLevel~., data=IMDB_2, subset=train,family="binomial",control=glm.control(maxit=50))
+model.tree <- tree(CriticLevel~ ., data=IMDB_2, subset=train) 
+model.nulll <-glm(CriticLevel~1, data=IMDB_2, subset=train,family="binomial")
+
+# Get predictions: type=response so we have probabilities
+pred.logistic <- predict(model.logistic, newdata=IMDB_2[-train,], type="response")
+pred.tree <- predict(model.tree, newdata=IMDB_2[-train,], type="vector")
+pred.tree <- pred.tree[,2]
+pred.null <- predict(model.nulll, newdata=IMDB_2[-train,], type="response")
+  
+## calculate and log R2
+# Logistic
+OOS$logistic[k] <- R2(y=IMDB_2$CriticLevel[-train], pred=pred.logistic, family="binomial")
+OOS$logistic[k]
+# Tree
+OOS$tree[k] <- R2(y=IMDB_2$CriticLevel[-train], pred=pred.tree, family="binomial")
+OOS$tree[k]
+#Null
+OOS$null[k] <- R2(y=IMDB_2$CriticLevel[-train], pred=pred.null, family="binomial")
+OOS$null[k]
+#Null Model guess
+sum(IMDB_2$CriticLevel[train]=="Bad")/length(train)
+  
+
+print(paste("Iteration",k,"of",nfold,"(thank you for your patience)"))
+}
+
+dev.off()
+colMeans(OOS)
+m.OOS <- as.matrix(OOS)
+rownames(m.OOS) <- c(1:nfold)
+barplot(t(as.matrix(OOS)), beside=TRUE, legend=TRUE, args.legend=c(xjust=1, yjust=0.5),
+ylab= bquote( "Out of Sample " ~ R^2), xlab="Fold", names.arg = c(1:10))
+
+#POST LASSO VS. LASSO
+set.seed(999)
+LX=model.matrix(CriticLevel~.,data=IMDB_1)
+LY=IMDB_1$CriticLevel =="Bad"
+lasso=glmnet(LX,LY,family='binomial')
+IMDB_lasso <- cv.glmnet(LX,LY,family='binomial')
+plot(IMDB_lasso)
+
+features.1se <- support(lasso$beta[,which.min( (IMDB_lasso$lambda-IMDB_lasso$lambda.1se)^2)])
+selectdata.1se <- data.frame(LX[,features.1se],LY)
+features.min= support(lasso$beta[,which.min(IMDB_lasso$cvm)])
+selectdata.min=data.frame(LX[,features.min],LY)
+
+
+
+
+dim(selectdata.1se) #37
+movies_lasso_1se <- glm(LY~., data=selectdata.1se,family = "binomial")
+summary(movies_lasso_1se)
+
+PL.OOS <- data.frame(PL.1se=rep(NA,nfold)) 
+L.OOS <- data.frame(L.1se=rep(NA,nfold)) 
+
+
+
+OOS.TP <- data.frame( logistic=rep(NA,nfold), tree=rep(NA,nfold), null=rep(NA,nfold)) 
+OOS.TN <- data.frame( logistic=rep(NA,nfold), tree=rep(NA,nfold), null=rep(NA,nfold)) 
+OOS.FP <- data.frame( logistic=rep(NA,nfold), tree=rep(NA,nfold), null=rep(NA,nfold)) 
+OOS.FN <- data.frame( logistic=rep(NA,nfold), tree=rep(NA,nfold), null=rep(NA,nfold))
+
+
+
+
+val <- .3
+for(k in 1:nfold){ 
+  train <- which(foldid!=k) # train on all but fold `k'
+  
+  
+  if ( length(features.1se) == 0){ r1se <- glm(LY~1, data=IMDB_Matrix, subset=train, family="binomial") 
+  } else {r1se <- glm(LY~., data=selectdata.1se, subset=train, family="binomial")
+  }
+  
+  pred1se  <- predict(r1se, newdata=selectdata.1se[-train,], type="response")
+  
+  
+  values <- FPR_TPR( (pred1se >= val) , LY[-train] )
+  PL.OOS$PL.1se[k] <- values$ACC
+  lasso1se  <- glmnet( LX[train,],LY[train], family="binomial",lambda = IMDB_lasso$lambda.1se)
+  #lassoTheory <- glmnet( LX[train,],LY[train], family="binomial",lambda = lambda.theory)
+  
+  #predlassomin <- predict(lassomin, newx= LX[-train,], type="response")
+  predlasso1se  <- predict(lasso1se, newx= LX[-train,], type="response")
+  values <- FPR_TPR( (predlasso1se >= val) , LY[-train] )
+  L.OOS$L.1se[k] <- values$ACC
+  
+  model.logistic <-glm(CriticLevel~., data=IMDB_2, subset=train,family="binomial",control=glm.control(maxit=50))
+  model.tree <- tree(LY~ ., data=selectdata.1se, subset=train) 
+  model.nulll <-glm(CriticLevel~1, data=IMDB_2, subset=train,family="binomial")
+  
+  # Get predictions: type=response so we have probabilities
+  pred.logistic <- predict(model.logistic, newdata=IMDB_2[-train,], type="response")
+  pred.tree <- predict(model.tree, newdata=selectdata.1se[-train,], type="vector")
+  #pred.tree <- pred.tree[,2]
+  pred.null <- predict(model.nulll, newdata=IMDB_2[-train,], type="response")
+  values <- FPR_TPR( (pred.logistic >= val) , LY[-train] )
+  OOS$logistic[k] <- values$ACC
+  
+  # Tree
+  values <- FPR_TPR( (pred.tree >= val) , LY[-train] )
+  OOS$tree[k] <- values$ACC
+  
+  #Null
+  values <- FPR_TPR( (pred.null >= val) , LY[-train] )
+  OOS$null[k] <- values$ACC
+  
+  
+  print(paste("Iteration",k,"of",nfold,"completed"))
+}
+
+
+par(mar=c(1,1,1,1))
+par(mai=c(1,1,1,1))
+names(OOS)[1] <-"logistic"
+ACCperformance <- cbind(PL.OOS,L.OOS,OOS)
+colMeans(ACCperformance)
+names(OOS)[1] <-"logistic"
+
+barplot(colMeans(ACCperformance), xpd=FALSE, ylim=c(.2,.8), xlab="Method", ylab = "Accuracy")
+
+m.OOS <- as.matrix(ACCperformance)
+rownames(m.OOS) <- c(1:nfold)
+par(mar=c(1.5,1.5,1.5,1))
+par(mai=c(1.5,1.5,1.5,1))
+barplot(t(as.matrix(m.OOS)), beside=TRUE, legend=TRUE, args.legend=c(x= "topright", y=0.92,bty = "n"),
+        ylab= bquote( "Out of Sample Accuracy"), xlab="Fold", names.arg = c(1:10))
+
+
+
+library(pROC)
+glm.fit=glm(LY~., data=selectdata.1se,family="binomial")
+
+dev.off()
+roc(LY,glm.fit$fitted.values,plot = TRUE,legacy.axes=TRUE,percent=TRUE,xlab="FP precentage",ylab="TP percentage",
+    col="red",lwd=4)
+
+
+finalmodel=glm(LY~.,data=selectdata.1se,family = "binomial")
+list=sample(1:1000,10,replace = TRUE)
+selectdata.1se$Title=IMDB$Title
+prediction=predict(finalmodel,selectdata.1se[list,],type = "response")
+
+
+test=read.csv("test.csv")
+
+write.csv(test,"test.csv")
+
+tx=model.matrix(~.,data=test)[,-1]
+tt=data.frame(tx)
+colnames(selectdata.1se)
+colnames(tt)
+
+
+final_prediction=predict(finalmodel,newdata=tt,type="response")
+OOS$logistic[k] <- R2(y=IMDB_2$CriticLevel[-train], pred=pred.logistic, family="binomial")
+OOS$logistic[k]
+# Tree
+OOS$tree[k] <- R2(y=IMDB_2$CriticLevel[-train], pred=pred.tree, family="binomial")
+OOS$tree[k]
+#Null
+OOS$null[k] <- R2(y=IMDB_2$CriticLevel[-train], pred=pred.null, family="binomial")
+OOS$null[k]
+#Null Model guess
+sum(IMDB_2$CriticLevel[train]=="Bad")/length(train)
+
+print(paste("Iteration",k,"of",nfold,"(thank you for your patience)"))
+}
+
+dev.off()
+colMeans(OOS)
+m.OOS <- as.matrix(OOS)
+rownames(m.OOS) <- c(1:nfold)
+barplot(t(as.matrix(OOS)), beside=TRUE, legend=TRUE, args.legend=c(xjust=1, yjust=0.5),
+ylab= bquote( "Out of Sample " ~ R^2), xlab="Fold", names.arg = c(1:10))
+
+#POST LASSO VS. LASSO
+set.seed(999)
+LX=model.matrix(CriticLevel~.,data=IMDB_1)
+LY=IMDB_1$CriticLevel =="Bad"
+lasso=glmnet(LX,LY,family='binomial')
+IMDB_lasso <- cv.glmnet(LX,LY,family='binomial')
+plot(IMDB_lasso)
+
+features.1se <- support(lasso$beta[,which.min( (IMDB_lasso$lambda-IMDB_lasso$lambda.1se)^2)])
+selectdata.1se <- data.frame(LX[,features.1se],LY)
+features.min= support(lasso$beta[,which.min(IMDB_lasso$cvm)])
+selectdata.min=data.frame(LX[,features.min],LY)
+
+
+
+
+dim(selectdata.1se) #37
+movies_lasso_1se <- glm(LY~., data=selectdata.1se,family = "binomial")
+summary(movies_lasso_1se)
+
+PL.OOS <- data.frame(PL.1se=rep(NA,nfold)) 
+L.OOS <- data.frame(L.1se=rep(NA,nfold)) 
+
+OOS.TP <- data.frame( logistic=rep(NA,nfold), tree=rep(NA,nfold), null=rep(NA,nfold)) 
+OOS.TN <- data.frame( logistic=rep(NA,nfold), tree=rep(NA,nfold), null=rep(NA,nfold)) 
+OOS.FP <- data.frame( logistic=rep(NA,nfold), tree=rep(NA,nfold), null=rep(NA,nfold)) 
+OOS.FN <- data.frame( logistic=rep(NA,nfold), tree=rep(NA,nfold), null=rep(NA,nfold))
+
+
+
+val <- .3
+for(k in 1:nfold){ 
+  train <- which(foldid!=k) # train on all but fold `k'
+  
+  ### This is the CV for the Post Lasso Estimates
+  #rmin <- glm(LY~., data=selectdata.min, subset=train, family="binomial")
+  if ( length(features.1se) == 0){ r1se <- glm(LY~1, data=IMDB_Matrix, subset=train, family="binomial") 
+  } else {r1se <- glm(LY~., data=selectdata.1se, subset=train, family="binomial")
+  }
+  
+ 
+  pred1se  <- predict(r1se, newdata=selectdata.1se[-train,], type="response")
+  values <- FPR_TPR( (pred1se >= val) , LY[-train] )
+  PL.OOS$PL.1se[k] <- values$ACC
+ 
+  ### This is the CV for the Lasso estimates  
+  
+  lasso1se  <- glmnet( LX[train,],LY[train], family="binomial",lambda = IMDB_lasso$lambda.1se)
+  
+  predlasso1se  <- predict(lasso1se, newx= LX[-train,], type="response")
+  
+ 
+  values <- FPR_TPR( (predlasso1se >= val) , LY[-train] )
+  L.OOS$L.1se[k] <- values$ACC
+ 
+  
+  
+  model.logistic <-glm(CriticLevel~., data=IMDB_2, subset=train,family="binomial",control=glm.control(maxit=50))
+  model.tree <- tree(LY~ ., data=selectdata.1se, subset=train) 
+  model.nulll <-glm(CriticLevel~1, data=IMDB_2, subset=train,family="binomial")
+  
+  # Get predictions: type=response so we have probabilities
+  pred.logistic <- predict(model.logistic, newdata=IMDB_2[-train,], type="response")
+  pred.tree <- predict(model.tree, newdata=selectdata.1se[-train,], type="vector")
+  #pred.tree <- pred.tree[,2]
+  pred.null <- predict(model.nulll, newdata=IMDB_2[-train,], type="response")
+
+ 
+  values <- FPR_TPR( (pred.logistic >= val) , LY[-train] )
+  OOS$logistic[k] <- values$ACC
+  
+  values <- FPR_TPR( (pred.tree >= val) , LY[-train] )
+  OOS$tree[k] <- values$ACC
+ 
+  values <- FPR_TPR( (pred.null >= val) , LY[-train] )
+  OOS$null[k] <- values$ACC
+  
+  
+  print(paste("Iteration",k,"of",nfold,"completed"))
+}
+
+
+par(mar=c(1,1,1,1))
+par(mai=c(1,1,1,1))
+names(OOS)[1] <-"logistic"
+ACCperformance <- cbind(PL.OOS,L.OOS,OOS)
+colMeans(ACCperformance)
+names(OOS)[1] <-"logistic"
+
+barplot(colMeans(ACCperformance), xpd=FALSE, ylim=c(.2,.8), xlab="Method", ylab = "Accuracy")
+
+m.OOS <- as.matrix(ACCperformance)
+rownames(m.OOS) <- c(1:nfold)
+par(mar=c(1.5,1.5,1.5,1))
+par(mai=c(1.5,1.5,1.5,1))
+barplot(t(as.matrix(m.OOS)), beside=TRUE, legend=TRUE, args.legend=c(x= "topright", y=0.92,bty = "n"),
+        ylab= bquote( "Out of Sample Accuracy"), xlab="Fold", names.arg = c(1:10))
+
+
+
+library(pROC)
+glm.fit=glm(LY~., data=selectdata.1se,family="binomial")
+
+dev.off()
+roc(LY,glm.fit$fitted.values,plot = TRUE,legacy.axes=TRUE,percent=TRUE,xlab="FP precentage",ylab="TP percentage",
+    col="red",lwd=4)
+
+
+finalmodel=glm(LY~.,data=selectdata.1se,family = "binomial")
+list=sample(1:1000,10,replace = TRUE)
+selectdata.1se$Title=IMDB$Title
+prediction=predict(finalmodel,selectdata.1se[list,],type = "response")
+
+######
+test=read.csv("test.csv")
+write.csv(test,"test.csv")
+
+tx=model.matrix(~.,data=test)[,-1]
+tt=data.frame(tx)
+colnames(selectdata.1se)
+colnames(tt)
+
+
+final_prediction=predict(finalmodel,newdata=tt,type="response")
+```
+
+
+
+
+
+
